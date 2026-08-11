@@ -1,508 +1,773 @@
 # Homelab Kubernetes
 
-Cluster Kubernetes desenvolvido em laboratório utilizando **Ubuntu Server**, **containerd**, **kubeadm**, **kubelet** e **kubectl**.
+Cluster Kubernetes de laboratório desenvolvido sobre **Proxmox VE**, **Ubuntu Server**, **containerd**, **Flannel**, **MetalLB** e **NFS**.
 
-Este projeto faz parte de um Homelab construído sobre **Proxmox VE**, com o objetivo de criar um ambiente prático e reproduzível para estudar **Kubernetes, Linux, networking, storage, containers e infraestrutura**.
+O objetivo deste projeto é construir uma infraestrutura Kubernetes reproduzível para estudos práticos de:
 
-A infraestrutura das máquinas virtuais é mantida no projeto:
-
-```text
-homelab-proxmox-vms
-```
+* Kubernetes
+* Linux
+* Containers
+* Networking
+* Storage
+* Proxmox
+* NFS
+* MetalLB
+* Persistent Volumes
+* DevOps
+* CKA
 
 ---
 
-## 🎯 Objetivo
+## 📋 Objetivo
 
-Construir um cluster Kubernetes funcional utilizando três máquinas virtuais:
+Construir um cluster Kubernetes funcional utilizando:
 
 * 1 Control Plane
 * 2 Worker Nodes
+* Flannel como CNI
+* MetalLB como LoadBalancer
+* NFS como armazenamento compartilhado
 
-O ambiente será configurado de forma automatizada através de scripts e documentado no GitHub.
-
-A proposta é entender cada etapa da construção do cluster, desde a preparação do sistema operacional até a execução das aplicações.
-
----
-
-## 🏗️ Arquitetura
+Arquitetura atual:
 
 ```text
-                         Internet / LAN
-                              |
-                         10.10.1.1
-                           Gateway
-                              |
-                    ┌───────────────────┐
-                    │    Proxmox VE     │
-                    │    10.10.1.254    │
-                    │                   │
-                    │      vmbr0        │
-                    └─────────┬─────────┘
-                              |
-                 ┌────────────┼────────────┐
-                 |            |            |
-                 ▼            ▼            ▼
-          ┌────────────┐ ┌────────────┐ ┌────────────┐
-          │  Control   │ │  Worker 01 │ │  Worker 02 │
-          │   Plane    │ │            │ │            │
-          │            │ │            │ │            │
-          │ .241       │ │ .242       │ │ .243       │
-          │ 2 vCPU     │ │ 2 vCPU     │ │ 2 vCPU     │
-          │ 4 GB RAM   │ │ 2 GB RAM   │ │ 2 GB RAM   │
-          └─────┬──────┘ └─────┬──────┘ └─────┬──────┘
-                │               │               │
-                └───────────────┼───────────────┘
-                                |
-                         Kubernetes Cluster
-                                |
-                         ┌──────┴──────┐
-                         │             │
-                         ▼             ▼
-                      MetalLB        NFS
-                                   10.10.1.240
+                    Kubernetes Cluster
+                           |
+             +-------------+-------------+
+             |             |             |
+             v             v             v
+        Control Plane   Worker 01     Worker 02
+        10.10.1.241     10.10.1.242   10.10.1.243
+        2 vCPU / 4 GB    2 vCPU / 2 GB 2 vCPU / 2 GB
+             |             |             |
+             +-------------+-------------+
+                           |
+                        Flannel
+                    10.244.0.0/16
+                           |
+                           v
+                     Kubernetes Pods
 ```
 
 ---
 
-## 🖥️ Infraestrutura
+# 🏗️ Infraestrutura
 
-O cluster será executado sobre o seguinte ambiente:
+## Proxmox
 
-| Recurso             | Configuração   |
-| ------------------- | -------------- |
-| Hypervisor          | Proxmox VE 9.1 |
-| Sistema operacional | Ubuntu Server  |
-| Container Runtime   | containerd     |
-| Kubernetes          | kubeadm        |
-| Control Plane       | 1              |
-| Workers             | 2              |
-| NFS Server          | `10.10.1.240`  |
-| Rede                | `10.10.1.0/24` |
-| Gateway             | `10.10.1.1`    |
-
-### Nós Kubernetes
-
-| Hostname        | Função        | IP            |    CPU |  RAM |
-| --------------- | ------------- | ------------- | -----: | ---: |
-| `k8s-master-01` | Control Plane | `10.10.1.241` | 2 vCPU | 4 GB |
-| `k8s-worker-01` | Worker        | `10.10.1.242` | 2 vCPU | 2 GB |
-| `k8s-worker-02` | Worker        | `10.10.1.243` | 2 vCPU | 2 GB |
-
-### Storage
-
-Servidor NFS:
+O cluster Kubernetes é executado sobre VMs hospedadas no ambiente:
 
 ```text
-Hostname: nfs-server
-IP:       10.10.1.240
-Export:   /srv/nfs/k8s
+Proxmox VE
+    |
+    +-- k8s-master-01
+    +-- k8s-worker-01
+    +-- k8s-worker-02
+    +-- nfs-server
 ```
 
-O NFS já foi validado pelos três nós Kubernetes, incluindo:
+### Máquinas Virtuais
 
-* Conectividade
-* Export
-* Montagem
-* Escrita
-* Leitura
-* Desmontagem
+| VMID | Hostname        | Função        |    CPU |  RAM | IP            |
+| ---: | --------------- | ------------- | -----: | ---: | ------------- |
+|  191 | `k8s-master-01` | Control Plane | 2 vCPU | 4 GB | `10.10.1.241` |
+|  201 | `k8s-worker-01` | Worker        | 2 vCPU | 2 GB | `10.10.1.242` |
+|  202 | `k8s-worker-02` | Worker        | 2 vCPU | 2 GB | `10.10.1.243` |
+|  210 | `nfs-server`    | NFS Server    | 2 vCPU | 2 GB | `10.10.1.240` |
 
 ---
 
-## 🧱 Componentes
+# 🌐 Rede
 
-O ambiente será construído utilizando:
+A infraestrutura utiliza:
 
 ```text
-Kubernetes
-├── kubeadm
-├── kubelet
-├── kubectl
-├── containerd
-├── CNI
-├── MetalLB
-├── NFS
-├── PersistentVolume
-├── PersistentVolumeClaim
-├── StorageClass
-├── Ingress Controller
-└── Aplicações
+Rede:       10.10.1.0/24
+Gateway:    10.10.1.1
+Proxmox:    10.10.1.254
 ```
+
+### Endereçamento
+
+| Componente           | IP                          |
+| -------------------- | --------------------------- |
+| Gateway              | `10.10.1.1`                 |
+| MetalLB Pool         | `10.10.1.150 - 10.10.1.170` |
+| NFS Server           | `10.10.1.240`               |
+| Kubernetes Master    | `10.10.1.241`               |
+| Kubernetes Worker 01 | `10.10.1.242`               |
+| Kubernetes Worker 02 | `10.10.1.243`               |
+| Proxmox              | `10.10.1.254`               |
+
+A faixa:
+
+```text
+10.10.1.150 - 10.10.1.170
+```
+
+é reservada para serviços `LoadBalancer` do MetalLB.
 
 ---
 
-## ⚙️ Preparação dos Nós
+# ☸️ Kubernetes
 
-Antes da instalação do Kubernetes, os nós serão preparados com:
-
-* Configuração de hostname
-* Configuração de `/etc/hosts`
-* IP estático
-* Atualização do sistema
-* Instalação de pacotes básicos
-* Configuração de `chrony`
-* Desabilitação do Swap
-* Configuração dos módulos do kernel
-* Configuração do `sysctl`
-* Instalação do containerd
-* Configuração do containerd
-* Instalação do kubeadm
-* Instalação do kubelet
-* Instalação do kubectl
-
----
-
-## 📁 Estrutura do Projeto
+Versão atual:
 
 ```text
-homelab-kubernetes/
-│
-├── README.md
-├── .gitignore
-│
-├── docs/
-│   ├── architecture.md
-│   ├── installation.md
-│   └── networking.md
-│
-├── scripts/
-│   ├── prepare-node.sh
-│   ├── install-containerd.sh
-│   ├── install-kubernetes.sh
-│   └── validate-cluster.sh
-│
-└── manifests/
+Kubernetes v1.36.3
 ```
 
----
-
-## 🔧 Scripts
-
-### `prepare-node.sh`
-
-Responsável pela preparação inicial dos nós Kubernetes.
-
-Será utilizado nos:
-
-```text
-k8s-master-01
-k8s-worker-01
-k8s-worker-02
-```
-
-Principais configurações:
-
-```text
-Swap
-Kernel Modules
-Sysctl
-Hostname
-Hosts
-Pacotes básicos
-Chrony
-```
-
-### `install-containerd.sh`
-
-Responsável pela instalação e configuração do **containerd**, utilizado como Container Runtime do Kubernetes.
-
-### `install-kubernetes.sh`
-
-Responsável pela instalação dos componentes:
+Componentes:
 
 ```text
 kubeadm
 kubelet
 kubectl
+containerd
 ```
 
-### `validate-cluster.sh`
-
-Será utilizado posteriormente para validar:
+Runtime:
 
 ```text
-Nodes
-Pods
-Services
-Networking
-Storage
+containerd 2.2.2
+```
+
+Sistema operacional:
+
+```text
+Ubuntu Server 26.04 LTS
 ```
 
 ---
 
-## 🚀 Instalação do Cluster
+# 🧩 Container Runtime
 
-A instalação seguirá as seguintes etapas:
+O cluster utiliza:
 
 ```text
-1. Preparar os nós
-        ↓
-2. Instalar containerd
-        ↓
-3. Instalar kubeadm/kubelet/kubectl
-        ↓
-4. Inicializar Control Plane
-        ↓
-5. Configurar kubectl
-        ↓
-6. Instalar CNI
-        ↓
-7. Adicionar Worker 01
-        ↓
-8. Adicionar Worker 02
-        ↓
-9. Validar cluster
-        ↓
-10. Configurar MetalLB
-        ↓
-11. Configurar NFS
-        ↓
-12. Configurar StorageClass
-        ↓
-13. Deploy de aplicações
+containerd 2.2.2
+```
+
+Configuração:
+
+```text
+SystemdCgroup = true
+```
+
+CRI:
+
+```text
+habilitado
+```
+
+Todos os Nodes utilizam o mesmo runtime:
+
+```text
+k8s-master-01   containerd://2.2.2
+k8s-worker-01   containerd://2.2.2
+k8s-worker-02   containerd://2.2.2
 ```
 
 ---
 
-## 🌐 Networking
+# 🌐 CNI - Flannel
 
-A rede utilizada pelo laboratório é:
+O cluster utiliza **Flannel** como Container Network Interface.
+
+Pod CIDR:
 
 ```text
-10.10.1.0/24
+10.244.0.0/16
 ```
 
-| Componente    | IP            |
-| ------------- | ------------- |
-| Gateway       | `10.10.1.1`   |
-| Proxmox       | `10.10.1.254` |
-| NFS           | `10.10.1.240` |
-| Control Plane | `10.10.1.241` |
-| Worker 01     | `10.10.1.242` |
-| Worker 02     | `10.10.1.243` |
+Distribuição observada:
 
-A configuração do networking interno do Kubernetes será definida posteriormente através do CNI.
+```text
+k8s-master-01
+    |
+    +-- 10.244.0.0/24
+
+k8s-worker-01
+    |
+    +-- 10.244.1.0/24
+
+k8s-worker-02
+    |
+    +-- 10.244.2.0/24
+```
+
+O Flannel está configurado em todos os Nodes.
 
 ---
 
-## 💾 Storage
+# 🧪 Validação da Rede
 
-O servidor NFS fornecerá armazenamento compartilhado ao cluster.
+A infraestrutura foi validada utilizando Pods distribuídos entre os dois Workers.
+
+Exemplo:
+
+```text
+Worker 01
+10.10.1.242
+    |
+    +-- Pod 10.244.1.2
+    +-- Pod 10.244.1.3
+
+
+Worker 02
+10.10.1.243
+    |
+    +-- Pod 10.244.2.2
+    +-- Pod 10.244.2.3
+```
+
+Foi realizado teste bidirecional:
+
+```text
+10.244.2.2 → 10.244.1.2   OK
+10.244.1.2 → 10.244.2.2   OK
+```
+
+Resultado:
+
+```text
+Pod → Pod
+Pod → Pod entre Workers
+```
+
+**Status: OK**
+
+---
+
+# 🔎 CoreDNS
+
+O CoreDNS está funcionando corretamente.
+
+Foi validado acesso a Services através do DNS interno do Kubernetes.
+
+Exemplo:
+
+```text
+nginx-service
+```
+
+e:
+
+```text
+nginx-service.default.svc.cluster.local
+```
+
+Ambos foram utilizados para acessar o serviço Nginx com sucesso.
+
+---
+
+# 🚀 Deployment de Teste
+
+Foi criado um Deployment utilizando Nginx:
+
+```text
+nginx
+```
+
+Configuração:
+
+```text
+Replicas: 2
+Image: nginx:alpine
+```
+
+Distribuição:
+
+```text
+nginx Pod
+10.244.1.3
+k8s-worker-01
+```
+
+```text
+nginx Pod
+10.244.2.3
+k8s-worker-02
+```
+
+Os Pods foram distribuídos entre os dois Workers.
+
+---
+
+# 🔌 Kubernetes Service
+
+Foi criado:
+
+```text
+nginx-service
+```
+
+Inicialmente como:
+
+```text
+ClusterIP
+```
+
+ClusterIP:
+
+```text
+10.106.196.24
+```
+
+Endpoints:
+
+```text
+10.244.1.3:80
+10.244.2.3:80
+```
+
+Foi validado acesso ao Nginx através do ClusterIP.
+
+---
+
+# ⚖️ MetalLB
+
+O cluster utiliza **MetalLB** para disponibilizar Services do tipo:
+
+```text
+LoadBalancer
+```
+
+Modo:
+
+```text
+Layer 2
+```
+
+Namespace:
+
+```text
+metallb-system
+```
+
+Pool configurado:
+
+```text
+10.10.1.150 - 10.10.1.170
+```
+
+Configuração:
+
+```text
+IPAddressPool:
+    homelab-pool
+
+L2Advertisement:
+    homelab-l2
+```
+
+---
+
+# 🌐 LoadBalancer
+
+O `nginx-service` foi alterado para:
+
+```text
+TYPE: LoadBalancer
+```
+
+Configuração atual:
+
+```text
+ClusterIP:
+10.106.196.24
+
+External IP:
+10.10.1.150
+
+Port:
+80
+```
+
+Resultado:
+
+```text
+nginx-service
+      |
+      v
+LoadBalancer
+      |
+      v
+10.10.1.150
+      |
+      v
+MetalLB Layer 2
+      |
+      +-------------+
+      |             |
+      v             v
+10.244.1.3      10.244.2.3
+Worker 01       Worker 02
+```
+
+### Teste realizado
+
+O endereço:
+
+```text
+http://10.10.1.150
+```
+
+foi acessado pela rede LAN e apresentou corretamente a página padrão do Nginx.
+
+**MetalLB: VALIDADO COM SUCESSO**
+
+---
+
+# 💾 NFS
+
+O servidor NFS está disponível em:
+
+```text
+Hostname: nfs-server
+IP:       10.10.1.240
+```
 
 Export:
 
 ```text
-10.10.1.240:/srv/nfs/k8s
+/srv/nfs/k8s
 ```
 
-Posteriormente serão configurados:
+O NFS foi previamente validado a partir dos Nodes.
+
+Testes realizados:
 
 ```text
-PersistentVolume
-        ↓
-PersistentVolumeClaim
-        ↓
-StorageClass
-        ↓
-Aplicações Kubernetes
-```
-
-O objetivo é trabalhar com armazenamento persistente e compreender o funcionamento de volumes no Kubernetes.
-
----
-
-## ⚖️ Load Balancing
-
-Será utilizado o **MetalLB** para fornecer endereços IP do tipo `LoadBalancer` dentro da rede do laboratório.
-
-Faixa planejada:
-
-```text
-10.10.1.0/24
-```
-
-A faixa específica de endereços reservada ao MetalLB será definida durante a configuração do cluster.
-
----
-
-## 🔍 Validação
-
-Após a instalação, serão realizados testes de:
-
-### Nodes
-
-```bash
-kubectl get nodes -o wide
-```
-
-### Pods
-
-```bash
-kubectl get pods -A
-```
-
-### Services
-
-```bash
-kubectl get svc -A
-```
-
-### Storage
-
-```bash
-kubectl get pv
-kubectl get pvc
-```
-
-### Cluster
-
-```bash
-kubectl cluster-info
-```
-
----
-
-## 🗺️ Roadmap
-
-### Preparação
-
-* [ ] Criar estrutura do projeto
-* [ ] Documentar arquitetura
-* [ ] Validar infraestrutura Proxmox
-* [ ] Validar conectividade dos nós
-* [ ] Desabilitar Swap
-* [ ] Configurar módulos do Kernel
-* [ ] Configurar sysctl
-* [ ] Preparar sistema operacional
-
-### Container Runtime
-
-* [ ] Instalar containerd
-* [ ] Configurar SystemdCgroup
-* [ ] Validar containerd
-
-### Kubernetes
-
-* [ ] Instalar kubeadm
-* [ ] Instalar kubelet
-* [ ] Instalar kubectl
-* [ ] Inicializar Control Plane
-* [ ] Configurar kubeconfig
-* [ ] Instalar CNI
-* [ ] Adicionar Worker 01
-* [ ] Adicionar Worker 02
-* [ ] Validar cluster
-
-### Networking
-
-* [ ] Configurar CNI
-* [ ] Validar comunicação entre Pods
-* [ ] Instalar MetalLB
-* [ ] Configurar IP Pool
-* [ ] Testar Service LoadBalancer
-
-### Storage
-
-* [ ] Configurar integração NFS
-* [ ] Criar StorageClass
-* [ ] Criar PersistentVolume
-* [ ] Criar PersistentVolumeClaim
-* [ ] Testar armazenamento persistente
-
-### Aplicações
-
-* [ ] Instalar Ingress Controller
-* [ ] Deploy de aplicação de teste
-* [ ] Configurar Service
-* [ ] Configurar Ingress
-* [ ] Validar acesso externo
-
----
-
-## 📊 Status
-
-🟡 **Projeto iniciado**
-
-A infraestrutura base já está pronta:
-
-```text
-Proxmox VE                 ✅
-Ubuntu Server              ✅
-3 nós Kubernetes           ✅
-Rede                       ✅
-IP estático                ✅
-Hostname                   ✅
-QEMU Guest Agent           ✅
-NFS Server                 ✅
-NFS Master                 ✅
-NFS Worker 01              ✅
-NFS Worker 02              ✅
+Conectividade   OK
+Export          OK
+Montagem         OK
+Escrita          OK
+Leitura          OK
+Desmontagem      OK
 ```
 
 Próxima etapa:
 
 ```text
-➡️ Preparação dos nós para Kubernetes
-```
-
----
-
-## 🔗 Infraestrutura
-
-A infraestrutura Proxmox utilizada neste projeto está documentada separadamente no projeto:
-
-```text
-homelab-proxmox-vms
-```
-
-Responsável por:
-
-```text
-Proxmox VE
-    ↓
-Máquinas Virtuais
-    ↓
-Rede
-    ↓
-Storage
-    ↓
 NFS
-    ↓
-Nós Kubernetes
+ |
+ +-- StorageClass
+ |
+ +-- PersistentVolume
+ |
+ +-- PersistentVolumeClaim
+ |
+ +-- Pod
 ```
 
 ---
 
-## 🎯 Objetivos de Aprendizado
+# 📁 Estrutura do Projeto
+
+```text
+homelab-kubernetes/
+│
+├── README.md
+│
+├── docs/
+│   ├── architecture.md
+│   ├── networking.md
+│   ├── storage.md
+│   └── metallb.md
+│
+├── manifests/
+│   ├── metallb/
+│   ├── storage/
+│   └── applications/
+│
+├── scripts/
+│   ├── prepare-node.sh
+│   ├── install-containerd.sh
+│   ├── install-kubernetes.sh
+│   ├── init-control-plane.sh
+│   ├── install-metallb.sh
+│   └── ...
+│
+└── .gitignore
+```
+
+---
+
+# 🔧 Scripts
+
+Os scripts do projeto são utilizados para automatizar a preparação e configuração dos Nodes.
+
+Principais etapas:
+
+```text
+prepare-node.sh
+       |
+       v
+install-containerd.sh
+       |
+       v
+install-kubernetes.sh
+       |
+       v
+init-control-plane.sh
+       |
+       v
+Flannel
+       |
+       v
+Worker Join
+       |
+       v
+install-metallb.sh
+```
+
+---
+
+# 🧪 Validações Realizadas
+
+## Nodes
+
+```bash
+kubectl get nodes -o wide
+```
+
+Resultado:
+
+```text
+k8s-master-01   Ready
+k8s-worker-01   Ready
+k8s-worker-02   Ready
+```
+
+## Pods
+
+```bash
+kubectl get pods -A -o wide
+```
+
+Todos os componentes principais estão `Running`.
+
+## Flannel
+
+```bash
+kubectl get pods -n kube-flannel -o wide
+```
+
+Flannel presente nos três Nodes.
+
+## Services
+
+```bash
+kubectl get svc
+```
+
+Services funcionando corretamente.
+
+## EndpointSlice
+
+O Kubernetes v1.36 utiliza `EndpointSlice` como mecanismo recomendado para descoberta dos endpoints.
+
+Exemplo:
+
+```bash
+kubectl get endpointslices \
+  -l kubernetes.io/service-name=nginx-service
+```
+
+---
+
+# 🗺️ Roadmap
+
+## Infraestrutura
+
+* [x] Proxmox VE
+* [x] Ubuntu Server
+* [x] Rede `10.10.1.0/24`
+* [x] VMs
+* [x] NFS Server
+* [x] Testes NFS
+* [x] containerd
+* [x] Kubernetes
+* [x] Control Plane
+* [x] Worker 01
+* [x] Worker 02
+
+## Kubernetes
+
+* [x] kubeadm
+* [x] kubelet
+* [x] kubectl
+* [x] containerd
+* [x] Flannel
+* [x] CoreDNS
+* [x] Pod → Pod
+* [x] Service ClusterIP
+* [x] Service DNS
+* [x] Deployment
+* [x] MetalLB
+* [x] IPAddressPool
+* [x] L2Advertisement
+* [x] LoadBalancer
+* [x] Acesso externo via LAN
+
+## Storage
+
+* [ ] Integração NFS com Kubernetes
+* [ ] StorageClass
+* [ ] PersistentVolume
+* [ ] PersistentVolumeClaim
+* [ ] Teste de persistência
+* [ ] Dynamic Provisioning
+
+## Networking
+
+* [x] Flannel
+* [x] CoreDNS
+* [x] ClusterIP
+* [x] Service Discovery
+* [x] MetalLB Layer 2
+* [x] LoadBalancer
+* [ ] Ingress Controller
+* [ ] TLS
+* [ ] DNS externo
+
+## Aplicações
+
+* [x] Nginx de teste
+* [ ] Aplicação com persistência NFS
+* [ ] Ingress
+* [ ] Aplicação multi-replica
+* [ ] Monitoramento
+* [ ] Observabilidade
+
+---
+
+# 🎯 Objetivos de Aprendizado
 
 Este laboratório tem como objetivo desenvolver conhecimentos práticos em:
 
-* Kubernetes
 * Linux
-* Containers
+* Kubernetes
+* Proxmox VE
+* Virtualização
+* Container Runtime
 * containerd
 * kubeadm
-* kubelet
-* kubectl
-* Kubernetes Networking
-* CNI
+* Networking
+* Flannel
+* CoreDNS
+* Kubernetes Services
 * MetalLB
+* LoadBalancer
 * NFS
 * Persistent Volumes
 * StorageClass
 * Ingress
-* Services
-* DNS
-* Troubleshooting
-* Git
-* GitHub
 * DevOps
-
-O objetivo é construir o cluster desde a base, documentar as decisões e entender o funcionamento de cada componente.
+* Git
+* Infrastructure as Code
+* CKA
 
 ---
 
-## 📄 Licença
+# 📊 Status Atual
 
-Este projeto foi desenvolvido para fins de estudo, laboratório e aprendizado prático de Kubernetes, Linux, containers, redes e infraestrutura.
+```text
+============================================================
+ KUBERNETES HOMELAB
+============================================================
+
+Nodes:
+  Control Plane : READY
+  Worker 01     : READY
+  Worker 02     : READY
+
+Kubernetes:
+  Version       : v1.36.3
+
+Container Runtime:
+  containerd    : 2.2.2
+
+CNI:
+  Flannel       : OK
+  Pod CIDR      : 10.244.0.0/16
+
+DNS:
+  CoreDNS       : OK
+
+Networking:
+  Pod → Pod      : OK
+  Service        : OK
+  Service DNS    : OK
+
+MetalLB:
+  Mode           : Layer 2
+  Pool           : 10.10.1.150-10.10.1.170
+  LoadBalancer   : 10.10.1.150
+  Status         : OK
+
+NFS:
+  Server         : 10.10.1.240
+  Export         : /srv/nfs/k8s
+  Status         : VALIDATED
+
+============================================================
+ STATUS: INFRAESTRUTURA KUBERNETES FUNCIONAL
+============================================================
+```
+
+---
+
+# 🚀 Próxima Etapa
+
+A próxima etapa do projeto será integrar o **NFS ao Kubernetes** para fornecer armazenamento persistente.
+
+Arquitetura planejada:
+
+```text
+                    Kubernetes
+                         |
+                    NFS Storage
+                         |
+                  10.10.1.240
+                         |
+                   /srv/nfs/k8s
+                         |
+                +--------+--------+
+                |        |        |
+                v        v        v
+               PV       PVC   StorageClass
+                         |
+                         v
+                        Pod
+```
+
+Após a implementação do armazenamento persistente, o laboratório poderá evoluir para:
+
+```text
+NFS
+ |
+StorageClass
+ |
+PersistentVolume
+ |
+PersistentVolumeClaim
+ |
+Applications
+ |
+Ingress
+ |
+MetalLB
+ |
+LAN
+```
+
+---
+
+# 📄 Licença
+
+Este projeto foi desenvolvido para fins de estudo, laboratório e aprendizado prático de infraestrutura, Linux, virtualização, Kubernetes e DevOps.
+
+```
+```
