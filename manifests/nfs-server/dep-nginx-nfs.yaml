@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-prod
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: front
+
+  template:
+    metadata:
+      labels:
+        app: front
+
+    spec:
+      containers:
+        - name: container-nginx
+          image: nginx
+
+          ports:
+            - containerPort: 80
+
+          volumeMounts:
+            - name: nginx-prod-nfs
+              mountPath: /usr/share/nginx/html
+
+      volumes:
+        - name: nginx-prod-nfs
+          persistentVolumeClaim:
+            claimName: nginx-prod-nfs

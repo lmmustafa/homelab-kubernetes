@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kteste-ingress
+spec:
+  rules:
+  - host: foo.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: svc
+            port:
+              name: port
+        path: /
+        pathType: Exact
+status:
+  loadBalancer: {}

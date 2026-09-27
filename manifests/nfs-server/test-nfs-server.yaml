@@ -1,0 +1,251 @@
+#!/bin/bash
+
+set -e
+
+# ============================================================
+# Teste NFS - Homelab K8s
+# ============================================================
+
+NFS_SERVER="10.10.1.240"
+NFS_HOSTNAME="nfs-server"
+NFS_EXPORT="/srv/nfs/k8s"
+MOUNT_POINT="/mnt/nfs-test"
+
+TEST_FILE="nfs-test-$(hostname).txt"
+TEST_CONTENT="NFS funcionando - $(hostname) - $(date)"
+
+echo
+echo "=========================================="
+echo " Teste NFS - Homelab K8s"
+echo "=========================================="
+echo
+
+# ============================================================
+# Verificar root
+# ============================================================
+
+if [ "$EUID" -ne 0 ]; then
+    echo "ERRO: execute este script como root."
+    echo
+    echo "Exemplo:"
+    echo "  sudo ./test-nfs.sh"
+    exit 1
+fi
+
+# ============================================================
+# Informações
+# ============================================================
+
+echo "Node         : $(hostname)"
+echo "NFS Server   : $NFS_SERVER"
+echo "Hostname NFS : $NFS_HOSTNAME"
+echo "Export       : $NFS_EXPORT"
+echo "Mount Point  : $MOUNT_POINT"
+echo
+
+# ============================================================
+# 1. Testar conectividade
+# ============================================================
+
+echo "[1/7] Testando conectividade com o NFS Server..."
+
+if ping -c 2 -W 2 "$NFS_SERVER" >/dev/null 2>&1; then
+    echo "OK - servidor NFS acessível."
+else
+    echo "ERRO - não foi possível alcançar $NFS_SERVER."
+    exit 1
+fi
+
+echo
+
+# ============================================================
+# 2. Testar resolução de hostname
+# ============================================================
+
+echo "[2/7] Testando resolução do hostname..."
+
+RESOLVED_IP=$(getent hosts "$NFS_HOSTNAME" | awk '{print $1}' | head -n 1)
+
+if [ "$RESOLVED_IP" = "$NFS_SERVER" ]; then
+    echo "OK - $NFS_HOSTNAME -> $RESOLVED_IP"
+else
+    echo "AVISO - $NFS_HOSTNAME resolveu para:"
+    echo "${RESOLVED_IP:-não encontrado}"
+    echo
+    echo "Continuando utilizando o IP $NFS_SERVER."
+fi
+
+echo
+
+# ============================================================
+# 3. Verificar NFS Client
+# ============================================================
+
+echo "[3/7] Verificando NFS Client..."
+
+if ! command -v mount.nfs >/dev/null 2>&1; then
+
+    echo "NFS Client não encontrado."
+    echo "Instalando nfs-common..."
+
+    apt update
+    apt install -y nfs-common
+
+fi
+
+if command -v mount.nfs >/dev/null 2>&1; then
+    echo "OK - mount.nfs disponível."
+else
+    echo "ERRO - mount.nfs não encontrado."
+    exit 1
+fi
+
+echo
+
+# ============================================================
+# 4. Verificar export NFS
+# ============================================================
+
+echo "[4/7] Verificando export NFS..."
+
+EXPORTS=$(showmount -e "$NFS_SERVER" 2>/dev/null || true)
+
+if echo "$EXPORTS" | grep -q "$NFS_EXPORT"; then
+
+    echo "OK - export encontrado:"
+    echo
+    echo "$EXPORTS"
+
+else
+
+    echo "ERRO - export não encontrado:"
+    echo "$NFS_EXPORT"
+    echo
+    echo "Exports disponíveis:"
+    echo "$EXPORTS"
+
+    exit 1
+
+fi
+
+echo
+
+# ============================================================
+# 5. Montar NFS
+# ============================================================
+
+echo "[5/7] Montando NFS..."
+
+mkdir -p "$MOUNT_POINT"
+
+if mountpoint -q "$MOUNT_POINT"; then
+    echo "Ponto já está montado."
+    echo "Desmontando montagem anterior..."
+
+    umount "$MOUNT_POINT"
+fi
+
+mount -t nfs "$NFS_SERVER:$NFS_EXPORT" "$MOUNT_POINT"
+
+echo "OK - NFS montado."
+
+echo
+echo "Montagem:"
+mount | grep "$MOUNT_POINT"
+
+echo
+
+# ============================================================
+# 6. Testar escrita e leitura
+# ============================================================
+
+echo "[6/7] Testando escrita e leitura..."
+
+TEST_PATH="$MOUNT_POINT/$TEST_FILE"
+
+echo "$TEST_CONTENT" > "$TEST_PATH"
+
+if [ ! -f "$TEST_PATH" ]; then
+    echo "ERRO - arquivo não foi criado."
+
+    umount "$MOUNT_POINT"
+    exit 1
+fi
+
+echo "OK - arquivo criado."
+
+READ_CONTENT=$(cat "$TEST_PATH")
+
+if [ "$READ_CONTENT" = "$TEST_CONTENT" ]; then
+    echo "OK - leitura funcionando."
+else
+    echo "ERRO - conteúdo lido é diferente."
+    
+    umount "$MOUNT_POINT"
+    exit 1
+fi
+
+echo
+echo "Arquivo:"
+echo "$TEST_PATH"
+
+echo
+echo "Conteúdo:"
+echo "$READ_CONTENT"
+
+echo
+
+# ============================================================
+# Remover arquivo de teste
+# ============================================================
+
+rm -f "$TEST_PATH"
+
+echo "Arquivo de teste removido."
+
+echo
+
+# ============================================================
+# 7. Desmontar NFS
+# ============================================================
+
+echo "[7/7] Desmontando NFS..."
+
+umount "$MOUNT_POINT"
+
+if mountpoint -q "$MOUNT_POINT"; then
+
+    echo "ERRO - não foi possível desmontar."
+    exit 1
+
+else
+
+    echo "OK - NFS desmontado."
+
+fi
+
+echo
+
+# ============================================================
+# Resultado
+# ============================================================
+
+echo "=========================================="
+echo " TESTE NFS CONCLUÍDO COM SUCESSO"
+echo "=========================================="
+echo
+
+echo "Node           : $(hostname)"
+echo "NFS Server     : $NFS_SERVER"
+echo "NFS Export     : $NFS_EXPORT"
+echo
+echo "Conectividade  : OK"
+echo "Hostname       : OK/AVISO"
+echo "NFS Client     : OK"
+echo "Export         : OK"
+echo "Montagem       : OK"
+echo "Escrita        : OK"
+echo "Leitura        : OK"
+echo "Desmontagem    : OK"
+echo
+echo "=========================================="

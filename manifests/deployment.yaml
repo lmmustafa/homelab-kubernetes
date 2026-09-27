@@ -7,11 +7,10 @@ metadata:
     app: dep-webapp
   name: dep-webapp
   namespace: default
-  resourceVersion: "139225"
-  uid: d847e09d-5d6f-4bc2-91a7-792f02afceb5
+  
 spec:
   progressDeadlineSeconds: 600
-  replicas: 2
+  replicas: 3
   revisionHistoryLimit: 10
   selector:
     matchLabels:

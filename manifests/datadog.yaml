@@ -1,0 +1,33 @@
+apiVersion: datadoghq.com/v2alpha1
+kind: DatadogAgent
+
+metadata:
+  name: datadog
+  namespace: datadog
+
+spec:
+
+  global:
+    clusterName: kubernetes
+
+    credentials:
+      apiSecret:
+        keyName: api-key
+        secretName: datadog-secret
+
+    site: datadoghq.com
+
+  features:
+    clusterChecks:
+      enabled: true
+
+    orchestratorExplorer:
+      enabled: true
+
+  override:
+    nodeAgent:
+      env:
+        - name: DD_HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName

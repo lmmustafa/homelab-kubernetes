@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: k002-hom-nginx-dep
+  name: k002-hom-nginx-dep
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k002-hom-nginx-dep
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: k002-hom-nginx-dep
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+        volumeMounts:
+          - mountPath: /usr/share/nginx/html
+            name: nginx-data
+      volumes:
+        - name: nginx-data
+          persistentVolumeClaim:
+            claimName: k002-hom-nginx-pvc
+      resources: {}
+status: {}

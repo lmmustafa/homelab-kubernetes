@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-01
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      tier: frontend  
+  template:
+    metadata:
+      name: pod-1
+      labels:
+        tier: frontend
+    spec:
+      containers:
+        - name: pod-1-container
+          image: nginx:1.7.1
+    
