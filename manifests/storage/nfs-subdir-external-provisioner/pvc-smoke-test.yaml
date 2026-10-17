@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-smoke-test
+  namespace: nfs-provisioner
+spec:
+  storageClassName: nfs-server-k8s
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-smoke-test
+  namespace: nfs-provisioner
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: k8s-worker-01
+  containers:
+    - name: writer
+      image: busybox:1.36
+      command:
+        - /bin/sh
+        - -c
+        - "date -Is > /data/nfs-test.txt && cat /data/nfs-test.txt"
+      volumeMounts:
+        - name: nfs-volume
+          mountPath: /data
+  volumes:
+    - name: nfs-volume
+      persistentVolumeClaim:
+        claimName: nfs-smoke-test

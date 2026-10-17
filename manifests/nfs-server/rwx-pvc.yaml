@@ -3,7 +3,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: rwx-test
 spec:
-  storageClassName: nfs-client
+  storageClassName: nfs-server-k8s
   accessModes:
     - ReadWriteMany
   resources:

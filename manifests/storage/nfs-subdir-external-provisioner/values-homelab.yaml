@@ -1,0 +1,43 @@
+replicaCount: 1
+strategyType: Recreate
+
+image:
+  repository: registry.k8s.io/sig-storage/nfs-subdir-external-provisioner
+  tag: v4.0.2
+  pullPolicy: IfNotPresent
+
+nfs:
+  server: "10.10.1.240"
+  path: "/srv/nfs/k8s"
+  reclaimPolicy: Retain
+
+storageClass:
+  create: true
+  name: nfs-server-k8s
+  provisionerName: homelab.local/nfs-server-k8s
+  defaultClass: false
+  allowVolumeExpansion: false
+  reclaimPolicy: Retain
+  archiveOnDelete: true
+  onDelete: retain
+  accessModes: ReadWriteMany
+  volumeBindingMode: Immediate
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker-01
+                - k8s-worker-02
