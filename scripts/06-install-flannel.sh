@@ -190,16 +190,16 @@ path = pathlib.Path(sys.argv[1])
 cidr = sys.argv[2]
 
 content = path.read_text()
-old = 'Network: "10.244.0.0/16"'
+old = '"Network": "10.244.0.0/16"'
 
 if old not in content:
     print("ERRO: configuração Network esperada não encontrada.")
     sys.exit(1)
 
-content = content.replace(old, f'Network: "{cidr}"', 1)
+content = content.replace(old, f'"Network": "{cidr}"', 1)
 path.write_text(content)
 
-if f'Network: "{cidr}"' not in content:
+if f'"Network": "{cidr}"' not in content:
     print("ERRO: não foi possível validar o Pod CIDR no manifesto.")
     sys.exit(1)
 
