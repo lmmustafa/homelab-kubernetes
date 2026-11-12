@@ -38,7 +38,7 @@ source "$CONFIG_FILE"
 : "${IP_POOL_NAME:?Variável não definida}"
 : "${L2_ADVERTISEMENT_NAME:?Variável não definida}"
 
-METALLB_VERSION="v0.15.3"
+: "${METALLB_VERSION:?Variável METALLB_VERSION não definida}"
 METALLB_MANIFEST="https://raw.githubusercontent.com/metallb/metallb/${METALLB_VERSION}/config/manifests/metallb-native.yaml"
 
 # ============================================================
