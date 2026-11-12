@@ -255,7 +255,8 @@ kubectl wait \
 echo
 echo "[8/9] Aguardando CoreDNS..."
 
-kubectl rollout status \
+kubectl wait \
+    --for=condition=Available \
     deployment/coredns \
     -n kube-system \
     --timeout=180s
