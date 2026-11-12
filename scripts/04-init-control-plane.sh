@@ -181,12 +181,12 @@ if [[ ! -f "$CONTAINERD_CONFIG" ]]; then
 fi
 
 if ! awk '
-    /^\[.*runtimes\.runc\.options\][[:space:]]*$/ {
+    /^[[:space:]]*\[.*runtimes\.runc\.options\][[:space:]]*$/ {
         in_section=1
         next
     }
 
-    /^\[/ {
+    /^[[:space:]]*\[/ {
         in_section=0
     }
 
