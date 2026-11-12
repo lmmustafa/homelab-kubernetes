@@ -7,14 +7,13 @@ set -euo pipefail
 # ============================================================
 #
 # Uso:
-#   sudo ./prepare-node.sh
+#   sudo ./01-prepare-node.sh
 #
 # Opcionalmente informe o hostname esperado:
-#   sudo ./prepare-node.sh k8s-master-01
+#   sudo ./01-prepare-node.sh s0076-kubernetes-master-prd
+#   sudo ./01-prepare-node.sh s0077-kubernetes-worker-prd
 #
 # ============================================================
-
-K8S_NETWORK="10.10.1.0/24"
 
 echo
 echo "============================================================"
@@ -76,10 +75,8 @@ echo "[1/8] Atualizando sistema..."
 
 apt update
 
-apt upgrade -y
-
 echo
-echo "Sistema atualizado."
+echo "Índices de pacotes atualizados."
 echo
 
 # ============================================================
@@ -195,10 +192,8 @@ echo
 echo "[7/8] Validando resolução dos nós Kubernetes..."
 
 HOSTS=(
-    "10.10.1.241 k8s-master-01"
-    "10.10.1.242 k8s-worker-01"
-    "10.10.1.243 k8s-worker-02"
-    "10.10.1.240 nfs-server"
+    "192.168.250.76 s0076-kubernetes-master-prd"
+    "192.168.250.77 s0077-kubernetes-worker-prd"
 )
 
 for HOST_ENTRY in "${HOSTS[@]}"; do
@@ -206,10 +201,11 @@ for HOST_ENTRY in "${HOSTS[@]}"; do
     IP=$(echo "$HOST_ENTRY" | awk '{print $1}')
     NAME=$(echo "$HOST_ENTRY" | awk '{print $2}')
 
-    if grep -qE "^[[:space:]]*$IP[[:space:]]+$NAME([[:space:]]|$)" /etc/hosts; then
+    if getent hosts "$NAME" | awk -v ip="$IP" '$1 == ip {found=1} END {exit !found}'; then
         echo "OK: $NAME -> $IP"
     else
-        echo "AVISO: entrada não encontrada: $NAME -> $IP"
+        echo "ERRO: resolução incorreta: $NAME -> $IP"
+        exit 1
     fi
 
 done
@@ -223,21 +219,21 @@ echo
 echo "[8/8] Testando conectividade..."
 
 for IP in \
-    10.10.1.240 \
-    10.10.1.241 \
-    10.10.1.242 \
-    10.10.1.243
+    192.168.250.76 \
+    192.168.250.77
 do
 
     if ping -c 2 -W 1 "$IP" >/dev/null 2>&1; then
         echo "OK: $IP"
     else
         echo "ERRO: $IP não respondeu"
+        exit 1
     fi
 
 done
 
 echo
+
 
 # ============================================================
 # Validação final
@@ -247,6 +243,8 @@ echo "============================================================"
 echo " Validação Final"
 echo "============================================================"
 echo
+
+ERRORS=0
 
 echo "Hostname:"
 hostnamectl --static
@@ -259,6 +257,7 @@ echo
 echo "Swap:"
 if swapon --show | grep -q .; then
     echo "ERRO: Swap ainda está habilitado."
+    ERRORS=$((ERRORS + 1))
 else
     echo "OK: Swap desabilitado."
 fi
@@ -267,16 +266,42 @@ echo
 echo "Kernel Modules:"
 lsmod | grep -E 'overlay|br_netfilter' || true
 
+if ! lsmod | grep -q '^overlay'; then
+    echo "ERRO: overlay não está carregado."
+    ERRORS=$((ERRORS + 1))
+fi
+
+if ! lsmod | grep -q '^br_netfilter'; then
+    echo "ERRO: br_netfilter não está carregado."
+    ERRORS=$((ERRORS + 1))
+fi
+
 echo
 echo "IP Forward:"
-sysctl net.ipv4.ip_forward
+if [[ "$(sysctl -n net.ipv4.ip_forward)" == "1" ]]; then
+    echo "OK: IP Forward habilitado."
+else
+    echo "ERRO: IP Forward desabilitado."
+    ERRORS=$((ERRORS + 1))
+fi
 
 echo
 echo "Chrony:"
-systemctl is-active chrony
+if systemctl is-active --quiet chrony; then
+    echo "OK: Chrony ativo."
+else
+    echo "ERRO: Chrony não está ativo."
+    ERRORS=$((ERRORS + 1))
+fi
 
 echo
 echo "============================================================"
+
+if [[ "$ERRORS" -gt 0 ]]; then
+    echo " FALHA: $ERRORS validação(ões) não passaram."
+    exit 1
+fi
+
 echo " NODE PREPARADO COM SUCESSO"
 echo "============================================================"
 echo
@@ -284,4 +309,3 @@ echo "Hostname : $CURRENT_HOSTNAME"
 echo
 echo "Próxima etapa:"
 echo "  Instalação e configuração do containerd"
-echo

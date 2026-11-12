@@ -8,11 +8,11 @@ set -euo pipefail
 # ============================================================
 #
 # Node:
-#   k8s-master-01
-#   10.10.1.241
+#   s0076-kubernetes-master-prd
+#   192.168.250.76
 #
 # Kubernetes:
-#   v1.36.3
+#   1.37.1
 #
 # CNI:
 #   Flannel
@@ -21,39 +21,15 @@ set -euo pipefail
 #   10.244.0.0/16
 #
 # Uso:
-#   sudo ./init-control-plane.sh
+#   sudo ./04-init-control-plane.sh
 #
 # ============================================================
-
-KUBERNETES_VERSION="v1.36.3"
-
-CONTROL_PLANE_IP="10.10.1.241"
-CONTROL_PLANE_HOSTNAME="k8s-master-01"
-
-# Flannel
-POD_NETWORK_CIDR="10.244.0.0/16"
-
-# Kubernetes Services
-SERVICE_CIDR="10.96.0.0/12"
-
-# containerd CRI
-CRI_SOCKET="unix:///var/run/containerd/containerd.sock"
-
-KUBEADM_CONFIG="/etc/kubernetes/kubeadm-config.yaml"
-
-CONTAINERD_CONFIG="/etc/containerd/config.toml"
-
-echo
-echo "============================================================"
-echo " Inicialização do Kubernetes Control Plane"
-echo "============================================================"
-echo
 
 # ============================================================
 # Verificar root
 # ============================================================
 
-if [ "$EUID" -ne 0 ]; then
+if [[ "$EUID" -ne 0 ]]; then
     echo "ERRO: execute este script como root."
     echo
     echo "Exemplo:"
@@ -62,10 +38,49 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ============================================================
+# Carregar configuração central
+# ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+CONFIG_FILE="${PROJECT_DIR}/config/kubernetes.env"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "ERRO: arquivo de configuração não encontrado:"
+    echo "$CONFIG_FILE"
+    exit 1
+fi
+
+source "$CONFIG_FILE"
+
+: "${KUBERNETES_VERSION:?KUBERNETES_VERSION não definida}"
+: "${CONTROL_PLANE_IP:?CONTROL_PLANE_IP não definido}"
+: "${CONTROL_PLANE_HOSTNAME:?CONTROL_PLANE_HOSTNAME não definido}"
+: "${POD_NETWORK_CIDR:?POD_NETWORK_CIDR não definido}"
+: "${SERVICE_CIDR:?SERVICE_CIDR não definido}"
+
+KUBERNETES_VERSION="v${KUBERNETES_VERSION}"
+
+CRI_SOCKET="unix:///var/run/containerd/containerd.sock"
+
+KUBEADM_CONFIG="/etc/kubernetes/kubeadm-config.yaml"
+CONTAINERD_CONFIG="/etc/containerd/config.toml"
+
+# ============================================================
+# Cabeçalho
+# ============================================================
+
+echo
+echo "============================================================"
+echo " Inicialização do Kubernetes Control Plane"
+echo "============================================================"
+echo
+
+# ============================================================
 # Informações do sistema
 # ============================================================
 
-CURRENT_HOSTNAME=$(hostname)
+CURRENT_HOSTNAME="$(hostname)"
 
 echo "Hostname        : $CURRENT_HOSTNAME"
 echo "Kubernetes      : $KUBERNETES_VERSION"
@@ -81,14 +96,11 @@ echo
 
 echo "[1/10] Validando hostname..."
 
-if [ "$CURRENT_HOSTNAME" != "$CONTROL_PLANE_HOSTNAME" ]; then
-
+if [[ "$CURRENT_HOSTNAME" != "$CONTROL_PLANE_HOSTNAME" ]]; then
     echo "ERRO: hostname incorreto."
     echo
     echo "Atual   : $CURRENT_HOSTNAME"
     echo "Esperado: $CONTROL_PLANE_HOSTNAME"
-    echo
-
     exit 1
 fi
 
@@ -101,13 +113,18 @@ echo
 
 echo "[2/10] Validando endereço IP..."
 
-if ! ip -4 addr show | grep -q "$CONTROL_PLANE_IP"; then
+if ! ip -o -4 addr show |
+    awk -v ip="$CONTROL_PLANE_IP" '
+        {
+            split($4, address, "/")
+            if (address[1] == ip) found=1
+        }
+        END { exit !found }
+    '; then
 
     echo "ERRO: IP $CONTROL_PLANE_IP não encontrado."
     echo
-
     ip -br addr
-
     exit 1
 fi
 
@@ -120,15 +137,10 @@ echo
 
 echo "[3/10] Validando Swap..."
 
-if swapon --show | grep -q .; then
-
+if swapon --show --noheadings | grep -q .; then
     echo "ERRO: Swap está habilitado."
     echo
-    echo "Execute novamente:"
-    echo
-    echo "  prepare-node.sh"
-    echo
-
+    echo "Execute novamente o prepare-node.sh."
     exit 1
 fi
 
@@ -142,18 +154,14 @@ echo
 echo "[4/10] Validando containerd..."
 
 if ! command -v containerd >/dev/null 2>&1; then
-
     echo "ERRO: containerd não está instalado."
     exit 1
-
 fi
 
 if ! systemctl is-active --quiet containerd; then
-
     echo "ERRO: containerd não está ativo."
-    systemctl status containerd --no-pager
+    systemctl status containerd --no-pager || true
     exit 1
-
 fi
 
 echo "containerd: ACTIVE"
@@ -166,21 +174,35 @@ echo
 
 echo "[5/10] Validando SystemdCgroup..."
 
-if [ ! -f "$CONTAINERD_CONFIG" ]; then
-
+if [[ ! -f "$CONTAINERD_CONFIG" ]]; then
     echo "ERRO: configuração do containerd não encontrada:"
     echo "$CONTAINERD_CONFIG"
     exit 1
-
 fi
 
-if ! grep -qE \
-    '^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*true' \
-    "$CONTAINERD_CONFIG"; then
+if ! awk '
+    /^\[.*runtimes\.runc\.options\][[:space:]]*$/ {
+        in_section=1
+        next
+    }
+
+    /^\[/ {
+        in_section=0
+    }
+
+    in_section &&
+    /^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*true([[:space:]]*#.*)?[[:space:]]*$/ {
+        found=1
+    }
+
+    END {
+        exit !found
+    }
+' "$CONTAINERD_CONFIG"; then
 
     echo "ERRO: SystemdCgroup não está configurado como true."
+    echo "Verifique a seção runc.options do containerd."
     exit 1
-
 fi
 
 echo "SystemdCgroup: true"
@@ -193,27 +215,22 @@ echo
 echo "[6/10] Validando kubeadm..."
 
 if ! command -v kubeadm >/dev/null 2>&1; then
-
     echo "ERRO: kubeadm não está instalado."
     exit 1
-
 fi
 
-INSTALLED_VERSION=$(kubeadm version -o short)
+KUBEADM_VERSION="$(kubeadm version -o short)"
 
-echo "kubeadm: $INSTALLED_VERSION"
+echo "kubeadm: $KUBEADM_VERSION"
 
-if [ "$INSTALLED_VERSION" != "$KUBERNETES_VERSION" ]; then
-
+if [[ "$KUBEADM_VERSION" != "$KUBERNETES_VERSION" ]]; then
     echo "ERRO: versão incorreta do kubeadm."
-    echo
     echo "Esperada: $KUBERNETES_VERSION"
-    echo "Atual   : $INSTALLED_VERSION"
+    echo "Atual   : $KUBEADM_VERSION"
     exit 1
-
 fi
 
-echo "Versão: OK"
+echo "kubeadm: OK"
 echo
 
 # ============================================================
@@ -223,21 +240,19 @@ echo
 echo "[7/10] Validando kubelet..."
 
 if ! command -v kubelet >/dev/null 2>&1; then
-
     echo "ERRO: kubelet não está instalado."
     exit 1
-
 fi
 
-KUBELET_VERSION=$(kubelet --version)
+KUBELET_VERSION="$(kubelet --version | awk '{print $2}')"
 
-echo "$KUBELET_VERSION"
+echo "kubelet: $KUBELET_VERSION"
 
-if ! echo "$KUBELET_VERSION" | grep -q "$KUBERNETES_VERSION"; then
-
-    echo "ERRO: versão do kubelet diferente de $KUBERNETES_VERSION."
+if [[ "$KUBELET_VERSION" != "$KUBERNETES_VERSION" ]]; then
+    echo "ERRO: versão incorreta do kubelet."
+    echo "Esperada: $KUBERNETES_VERSION"
+    echo "Atual   : $KUBELET_VERSION"
     exit 1
-
 fi
 
 echo "kubelet: OK"
@@ -249,17 +264,14 @@ echo
 
 echo "[8/10] Verificando estado do Control Plane..."
 
-if [ -f "/etc/kubernetes/admin.conf" ]; then
-
+if [[ -f "/etc/kubernetes/admin.conf" ]]; then
     echo "ERRO: o Control Plane já foi inicializado."
     echo
     echo "Arquivo encontrado:"
     echo "/etc/kubernetes/admin.conf"
     echo
-    echo "Para evitar uma inicialização duplicada, o script será encerrado."
-
+    echo "Inicialização duplicada não será permitida."
     exit 1
-
 fi
 
 echo "Control Plane ainda não inicializado."
@@ -305,9 +317,7 @@ chmod 600 "$KUBEADM_CONFIG"
 echo
 echo "Configuração criada:"
 echo
-
 cat "$KUBEADM_CONFIG"
-
 echo
 
 # ============================================================
@@ -327,7 +337,7 @@ echo
 # Pré-baixar imagens
 # ============================================================
 
-echo "[10/10] Pré-baixando imagens do Kubernetes..."
+echo "Pré-baixando imagens do Kubernetes..."
 
 kubeadm config images pull \
     --config "$KUBEADM_CONFIG"
@@ -344,6 +354,7 @@ echo "============================================================"
 echo " CONFIGURAÇÃO DO CONTROL PLANE"
 echo "============================================================"
 echo
+
 echo "Hostname        : $CONTROL_PLANE_HOSTNAME"
 echo "IP              : $CONTROL_PLANE_IP"
 echo "Kubernetes      : $KUBERNETES_VERSION"
@@ -353,15 +364,20 @@ echo "CNI             : Flannel"
 echo "CRI             : containerd"
 echo
 
-echo "O comando que será executado:"
+echo "Comando que será executado:"
 echo
 echo "kubeadm init --config $KUBEADM_CONFIG"
 echo
+
+# ============================================================
+# Confirmação
+# ============================================================
 
 echo "============================================================"
 echo " ATENÇÃO"
 echo "============================================================"
 echo
+
 echo "O próximo passo irá inicializar o Control Plane."
 echo
 echo "Isso criará:"
@@ -370,21 +386,19 @@ echo "  - Kubernetes API Server"
 echo "  - Controller Manager"
 echo "  - Scheduler"
 echo "  - etcd"
-echo "  - certificados Kubernetes"
+echo "  - Certificados Kubernetes"
 echo "  - kubeconfig"
 echo
+
 echo "============================================================"
 echo
 
 read -r -p "Continuar com kubeadm init? [y/N]: " CONFIRM
 
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-
     echo
     echo "Operação cancelada pelo usuário."
-    echo
     exit 0
-
 fi
 
 # ============================================================
@@ -408,9 +422,16 @@ echo
 
 echo "Configurando kubeconfig..."
 
-if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
 
-    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+
+    if [[ -z "$USER_HOME" ]]; then
+        echo "ERRO: não foi possível localizar o diretório do usuário."
+        exit 1
+    fi
+
+    USER_GROUP="$(id -gn "$SUDO_USER")"
 
     mkdir -p "$USER_HOME/.kube"
 
@@ -418,11 +439,10 @@ if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         /etc/kubernetes/admin.conf \
         "$USER_HOME/.kube/config"
 
-    chown \
-        "$SUDO_USER:$SUDO_USER" \
-        "$USER_HOME/.kube/config"
-
+    chown "$SUDO_USER:$USER_GROUP" "$USER_HOME/.kube/config"
     chmod 600 "$USER_HOME/.kube/config"
+
+    export KUBECONFIG="$USER_HOME/.kube/config"
 
     echo "kubeconfig configurado para: $SUDO_USER"
 
@@ -468,17 +488,18 @@ echo "============================================================"
 echo " CONTROL PLANE INICIALIZADO COM SUCESSO"
 echo "============================================================"
 echo
+
 echo "Hostname : $CONTROL_PLANE_HOSTNAME"
 echo "IP       : $CONTROL_PLANE_IP"
-echo
+echo "Versão   : $KUBERNETES_VERSION"
 echo "Pod CIDR : $POD_NETWORK_CIDR"
-echo
 echo "CNI      : Flannel"
 echo
-echo "Próxima etapa:"
+
+echo "Próximas etapas:"
 echo
-echo "  1. Instalar Flannel"
-echo "  2. Validar CoreDNS"
-echo "  3. Gerar kubeadm join"
-echo "  4. Adicionar os Workers"
+echo "  1. Gerar o comando kubeadm join"
+echo "  2. Adicionar o Worker"
+echo "  3. Instalar Flannel"
+echo "  4. Validar CoreDNS"
 echo

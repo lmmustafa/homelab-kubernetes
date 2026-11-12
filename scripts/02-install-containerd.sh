@@ -152,7 +152,9 @@ echo "[6/8] Habilitando containerd..."
 
 systemctl daemon-reload
 
-systemctl enable --now containerd
+systemctl enable containerd
+
+systemctl restart containerd
 
 echo
 
@@ -178,13 +180,28 @@ echo
 
 echo "[8/8] Validando configuração Kubernetes..."
 
-SYSTEMD_CGROUP=$(grep -E '^[[:space:]]*SystemdCgroup[[:space:]]*=' \
-    "$CONTAINERD_CONFIG" | head -n 1 || true)
-
 echo "SystemdCgroup:"
-echo "${SYSTEMD_CGROUP:-não encontrado}"
 
-echo
+if awk '
+    /^\[plugins\..*containerd\.runtimes\.runc\.options\]$/ {
+        in_runc=1
+        next
+    }
+    /^\[/ {
+        in_runc=0
+    }
+    in_runc && /^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ {
+        found=1
+    }
+    END {
+        exit !found
+    }
+' "$CONTAINERD_CONFIG"; then
+    echo "OK: SystemdCgroup habilitado no runtime runc."
+else
+    echo "ERRO: SystemdCgroup não habilitado no runtime runc."
+    exit 1
+fi
 
 # ============================================================
 # Validação final
@@ -195,46 +212,88 @@ echo " Validação Final"
 echo "============================================================"
 echo
 
+ERRORS=0
+
 echo "Hostname:"
 hostnamectl --static
 
 echo
-
 echo "containerd:"
 containerd --version
 
 echo
-
 echo "Serviço:"
-systemctl is-active containerd
-
-echo
-
-echo "Boot:"
-systemctl is-enabled containerd
-
-echo
-
-echo "SystemdCgroup:"
-grep -E '^[[:space:]]*SystemdCgroup[[:space:]]*=' \
-    "$CONTAINERD_CONFIG" || true
-
-echo
-
-echo "CRI:"
-if containerd config dump 2>/dev/null | grep -q 'io.containerd.grpc.v1.cri'; then
-    echo "CRI: habilitado"
+if systemctl is-active --quiet containerd; then
+    echo "OK: containerd ativo."
 else
-    echo "AVISO: não foi possível confirmar o plugin CRI."
+    echo "ERRO: containerd inativo."
+    ERRORS=$((ERRORS + 1))
 fi
 
 echo
+echo "Boot:"
+if systemctl is-enabled --quiet containerd; then
+    echo "OK: containerd habilitado no boot."
+else
+    echo "ERRO: containerd não habilitado no boot."
+    ERRORS=$((ERRORS + 1))
+fi
 
+
+echo
+echo "SystemdCgroup:"
+if containerd config dump 2>/dev/null | awk '
+    /^[[:space:]]*\[.*runtimes\.runc\.options\][[:space:]]*$/ {
+        in_runc=1
+        next
+    }
+    /^[[:space:]]*\[/ {
+        in_runc=0
+    }
+    in_runc && /^[[:space:]]*SystemdCgroup[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$/ {
+        found=1
+    }
+    END {
+        exit !found
+    }
+'; then
+    echo "OK: SystemdCgroup habilitado no runtime runc."
+else
+    echo "ERRO: SystemdCgroup não habilitado no runtime runc."
+    ERRORS=$((ERRORS + 1))
+fi
+
+echo
+echo "CRI:"
+
+if ctr plugins ls | awk '
+    $1 == "io.containerd.cri.v1" && $2 == "runtime" && $NF == "ok" {
+        runtime=1
+    }
+    $1 == "io.containerd.cri.v1" && $2 == "images" && $NF == "ok" {
+        images=1
+    }
+    END {
+        exit !(runtime && images)
+    }
+'; then
+    echo "OK: plugins CRI runtime e images carregados."
+else
+    echo "ERRO: plugins CRI não estão funcionando."
+    ERRORS=$((ERRORS + 1))
+fi
+
+echo
 echo "============================================================"
+
+if [[ "$ERRORS" -gt 0 ]]; then
+    echo " FALHA: $ERRORS validação(ões) não passaram."
+    exit 1
+fi
+
 echo " CONTAINERD CONFIGURADO COM SUCESSO"
 echo "============================================================"
-echo
 
+echo
 echo "Próxima etapa:"
 echo "  Instalação do kubeadm, kubelet e kubectl"
-echo
