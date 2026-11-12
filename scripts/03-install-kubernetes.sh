@@ -4,7 +4,6 @@ set -euo pipefail
 
 # ============================================================
 # Instalação do Kubernetes
-# Homelab Kubernetes
 # ============================================================
 #
 # Instala:
@@ -30,7 +29,6 @@ if [[ "$EUID" -ne 0 ]]; then
     echo "Exemplo: sudo ./03-install-kubernetes.sh"
     exit 1
 fi
-
 
 # ============================================================
 # Carregar configuração central
@@ -125,12 +123,12 @@ if [[ ! -f "$CONTAINERD_CONFIG" ]]; then
 fi
 
 if ! awk '
-    /^\[.*runtimes\.runc\.options\][[:space:]]*$/ {
+    /^[[:space:]]*\[.*runtimes\.runc\.options\][[:space:]]*$/ {
         in_section=1
         next
     }
 
-    /^\[/ {
+    /^[[:space:]]*\[/ {
         in_section=0
     }
 
@@ -219,23 +217,27 @@ echo "[7/8] Verificando versões disponíveis..."
 
 get_package_version() {
     local package="$1"
-    local candidate
+    local package_version
 
-    candidate="$(apt-cache policy "$package" |
-        awk '/Candidate:/ {print $2; exit}')"
+    package_version="$(apt-cache madison "$package" |
+        awk -F'|' -v expected="${KUBERNETES_VERSION}" '
+            {
+                version=$2
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", version)
 
-    if [[ -z "$candidate" || "$candidate" == "(none)" ]]; then
-        echo "ERRO: pacote ${package} não encontrado."
+                if (version ~ ("^" expected "-")) {
+                    print version
+                    exit
+                }
+            }
+        ')"
+
+    if [[ -z "$package_version" ]]; then
+        echo "ERRO: versão ${KUBERNETES_VERSION} não encontrada para ${package}." >&2
         return 1
     fi
 
-    if [[ "$candidate" != "${KUBERNETES_VERSION}-"* ]]; then
-        echo "ERRO: versão esperada ${KUBERNETES_VERSION} para ${package}."
-        echo "Versão candidata encontrada: ${candidate}"
-        return 1
-    fi
-
-    printf '%s' "$candidate"
+    printf '%s' "$package_version"
 }
 
 KUBELET_PACKAGE_VERSION="$(get_package_version kubelet)"
